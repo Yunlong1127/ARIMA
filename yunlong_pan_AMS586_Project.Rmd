@@ -1,0 +1,290 @@
+---
+title: "AMS586 Project"
+author: "Yunlong Pan 113061415"
+date: "5/9/2020"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Report for Fitting a Time Series Model
+
+## 1. Introduction
+
+In this report, I choose the stock price of Sony Corporation (SNE) as my data to analyze. The time period for the data is from Jan 2015 to Dec 2019. The total number of data points is 1258. The line chart for the close price during that period is shown as below.
+```{r include=FALSE}
+require(quantmod)
+require(forecast)
+require(urca)
+require(tseries)
+
+##load the data
+
+getSymbols('SNE')
+```
+```{r}
+chartSeries(SNE,subset='2015::2019')
+
+```
+The structure of this report is as follows: in the second section, I will illustrate the method of modeling, which including the discussion about trend and seasonality and fitting the models for the random component; then, it will be followed by the diagnostic and comparison of the models in the third section; in the last section, there will be a short conclusion.
+
+## 2.Method of modeling
+
+To analyze the stock price, we usually calculate the logged return of the stock to make the data stationary. The following plot shows the daily logged return of SNE.
+```{r include=FALSE}
+##Calculate the log-return
+
+ret = na.omit(diff(log(SNE$SNE.Close)))
+r = ret["2015::2019"]
+n=length(r)
+```
+```{r}
+plot(r)
+```
+
+From the above plot, it seems that there is no trend or seasonality for this time series and the data has mean 0.
+
+### a.Trend
+
+To test whether there is a drift or a trend for the return, I used the Augmented Dickey–Fuller (ADF) test. The model for the ADF test is
+
+$$ \Delta X_t = \alpha +\beta t +\gamma X_{t-1}+\delta_1\Delta X_{t-1}+...+\delta_{p-1}\Delta X_{t-p-1}+\varepsilon_t $$
+
+Imposing the constraints $\alpha=0$ and $\beta=0$ corresponds to modelling a random walk without a drift, and using the constraint $\beta=0$ corresponds to modelling a random walk with a drift. The lag $p$ of the difference can be determined by AIC of the fitted AR models. The result of the test is as following.
+```{r}
+##Check for the trend
+summary(ur.df(r, type='trend', lags=20, selectlags="BIC"))
+```
+
+
+From the result, we can see that the intercept, which is $\alpha$, is significantly different from 0. It means that the mean of the time series is not 0, in other words, there is a drift. Also, there is no linear trend for this time series, since the coefficient for tt is not significant.
+
+Additionally, this test also indicates there is no unit root present since the null hypothesis of $\gamma=0$ is rejected. This means the model is not a random walk. We also notice that the $\hat{\gamma}=-1.054$ which means the AR part of the model is stationary.
+
+### b. Seasonality
+
+By viewing the ACF, PACF, and spectrum Periodgram, we cannot find an evidence for seasonality.
+
+```{r}
+##Check for the seasonality
+par(mfrow=c(3,1))
+acf(r)
+pacf(r)
+spec.pgram(r)
+```
+
+### c. Random component
+
+To remove the drift from the time series, we can use the two different methods: demeaning the data and making the difference.
+
+First, I try to demean the data and fit the demeaned data with a time series model. After deducting the mean of the series, the time plot, ACF and PACF are as following.
+
+```{r}
+##1.Demean
+r1=r-mean(r)
+par(mfrow=c(3,1))
+acf(r1,lag=10)
+pacf(r1,lag=10)
+plot(r1)
+```
+
+Since the Partial ACF cut off after the first lag, it seems that the demeaned logged return follows AR(1) model.
+
+```{r}
+fit = arima(r,order=c(1,0,0))
+summary(fit)
+```
+
+The diagnostic of residuals of the AR(1) model with drift is summarized in the following. From the ACF plot and the Ljung-Box statistics, we can see that the residuals are almost uncorrelated.
+```{r}
+tsdiag(fit)
+```
+We can also get rid of the drift by making first difference. Then the time plot, ACF and PACF are listed below.
+```{r}
+##2.Difference
+diffr = na.omit(diff(r))
+par(mfrow=c(3,1))
+plot(diffr)
+acf(diffr)
+pacf(diffr)
+
+```
+Since the ACF cut off after the first lag and the Partial ACF decrease gradually, it seems that the differenced logged return follows MA(1) model.
+```{r}
+
+fit1 = arima(r, order=c(0,1,1))
+summary(fit1)
+tsdiag(fit1)
+```
+The residual seems to be not independent from each other. To solve this, I tried ARIMA(1,1,1).
+
+```{r}
+fit2 = arima(r, order=c(1,1,1))
+summary(fit2)
+tsdiag(fit2)
+```
+
+The residuals for ARIMA(1,1,1) are much better than ARIMA(0,1,1).
+
+## 3. Model selection and diagnostic
+
+To compare the two models, I make a comparison of the information criteria. From the following table, we can see that the AR(1) model with intercept is much better than that of ARIMA(1,1,1).
+```{r include=FALSE}
+compare<-data.frame('model'<-c('AR(1)+intercept', 'ARIMA(1,1,1)'),
+           'Log-likelihood'<-c(3204.09,3197.45),
+           'AIC'<-c(-6402.19,-6388.89))
+names(compare)[1]<-'model'
+names(compare)[2]<-'Log-likelihood'
+names(compare)[3]<-'AIC'
+```
+```{r}
+compare
+```
+
+Thus the final model is
+$$X_t=0.0015-0.0321X_{t-1}+\varepsilon_t$$
+The diagnostic for the independence of the residual has been shown in the previous section. Besides that, we can also check the normality of the residuals. From the histogram and qq-plot of the residual, we can see that the residuals are not normal distirbuted. The flat density curve and the invert S-shaped qq-plot indicate that the denisty of the residual should be fat tailed.
+
+```{r}
+##Diagnostic
+res=residuals(fit)
+shapiro.test(res)
+
+par(mfrow=c(2,1))
+hist(res)
+lines(density(res))
+qqnorm(res)
+qqline(res)
+```
+```{r include=FALSE}
+dev.off()
+```
+
+## 4. Forecasting
+
+Using the AR(1) model with drift:
+
+$$X_t=0.0015-0.0321X_{t-1}+\varepsilon_t$$
+
+to forecast the logged return, I get the following result.
+```{r}
+##Forecasting of lag 10
+l=10 # number of lags for forecasting
+h=20 # number of training data shown in the plot
+
+fore <- forecast(fit,l)
+summary(fore)
+
+##Plot the forecasting logged return and the real value
+plot(fore,h,axes=FALSE,ylab="logged return",xlab="date",type="b")
+lines(c(n+0:l),ret["2019-12-31::"][1+0:l],type="b")
+
+#combine the time period of last h terms in training data and the testing data of length l
+date=c(index(r[n-0:(h-1)]),index(ret["2020-01-01::"][1:l]))
+#add x-axis and y-axis
+axis(1, at = c(n-h+1:(h+l)), labels = date, cex.axis=0.6)
+axis(2,cex.axis=0.6)
+box()
+```
+```{r}
+
+##Calculating the Forecasts of closing price
+fore.mean <- as.vector(fore$mean) #Change the estimated mean to a vector
+#change the last closing price in the training data to a number
+lastprice <- as.numeric(SNE$SNE.Close["2019-12-31"])
+fore.price <- Reduce(function(x,y){x*exp(y)},fore.mean, init=lastprice, accumulate=T)
+
+
+#95% Upper and Lower bond for closing price
+lower=fore.price[c(1+1:l)]*exp(fore$lower[,2])
+upper=fore.price[c(1+1:l)]*exp(fore$upper[,2])
+
+##Plot the forecasting closing price and the real value
+plot(date,SNE$SNE.Close[date],type="b",ylab="Closing price",ylim=c(60,75), main="Forecats of the Closing Price by lag of 10")
+period=index(ret["2019-12-31::"][1+0:l]) #the forecast period
+lines(period,fore.price,type="b",col="red")
+lines(period[1+1:l],upper,col="blue")
+lines(period[1+1:l],lower,col="blue")
+legend("topleft", c("Forecasting price","Closing price","95% CI"),col=c("red","black","blue"), text.col=c("red","black","blue"),lty=c(4,4,1), pch=c(1,1,NA),inset = .05)
+
+```
+
+
+From the results and the figures above, we can see that the forecasts tend to be the same after several steps. This can be explained by the ACF plot. Since the autocorrelation is quite small after the $1^{st}$ lag, the h-step-ahead forecast is not reliable. So I tried to do 1-step-ahead forecast, then re-fit the time series with newly added observations and then predict the next one.
+
+```{r}
+
+##Forecasting with lag of 1
+r2=c(r,ret["2020-01-01::"][1:l])
+fore2.mean=ret["2019-12-31::"][1+0:l]
+fore2.upper=vector()
+fore2.lower=vector()
+
+## Loop to overlay early forecasts
+
+for (j in seq(0, l-1, by=1)) {
+  
+  b.fit <-auto.arima(r2[1:(n+j)])
+  
+  b.pred <- forecast(b.fit, 1)
+  
+  fore2.mean[j+2]=b.pred$mean
+  
+  fore2.upper=rbind(fore2.upper,b.pred$upper)
+  
+  fore2.lower=rbind(fore2.lower,b.pred$lower)
+  
+}
+fore2 <- cbind(fore2.mean[1+1:l],fore2.upper,fore2.lower)
+colnames(fore2) <- c("Forecasts","H80","H95","L80","L95")
+fore2
+
+##Plotting
+
+plot(date,r2[date],type="b",ylab="logged return",ylim=c(-0.04,0.04),main="Forecasts of logged return with lag of 1")
+lines(period,fore2.mean,type="b",col="red")
+lines(period[1+1:l],fore2.mean[1+1:l]+fore2.upper[,1],col="blue")
+lines(period[1+1:l],fore2.mean[1+1:l]+fore2.lower[,1],col="blue")
+legend("topleft", c("Forecasting return","Real return","95% CI"), col=c("red","black","blue"),text.col=c("red","black","blue"),lty=c(4,4,1), pch=c(1,1,NA),inset = .05)
+
+##Calculating the Forecasts of closing price
+fore2.mean2=as.vector(fore2.mean[1+1:l])
+fore2.price <- Reduce(function(x,y){x*exp(y)},fore2.mean2, init=lastprice, accumulate=T)
+
+lower2=fore2.price[c(1+1:l)]*exp(fore2.lower[,2])
+upper2=fore2.price[c(1+1:l)]*exp(fore2.upper[,2])
+
+plot(date,SNE$SNE.Close[date],type="b",ylab="Closing price",ylim=c(60,80),main="Forecasts of the Closing Price by lag of 1")
+period=index(ret["2019-12-31::"][1+0:l]) #the forecast period
+
+lines(period,fore2.price,type="b",col="red")
+lines(period[1+1:l],upper,col="blue")
+lines(period[1+1:l],lower,col="blue")
+
+legend("topleft", c("Forecasting price","Closing price","95% CI"), col=c("red","black","blue"),text.col=c("red","black","blue"),lty=c(4,4,1), pch=c(1,1,NA),inset = .05)
+```
+
+From the plots, it seems that the forecasts of the logged return of lag 1 are more close to the real data. However, by comparing the sum squared error, we can get the opposite conclusion. This can be explained by the small sample size we are using, only 10 forecast values. If we do testing based on larger sample size, the forecast result for the 1-step-ahead forecasting should be much better.
+
+```{r}
+
+##Calculating the sum square error
+sum((fore.mean-as.vector(ret[period[1+1:l]]))^2)#SSE of lag10
+sum((fore2.mean2-as.vector(ret[period[1+1:l]]))^2)#SSE of lag1
+
+```
+
+
+## 5. Conclusion
+
+I fit the logged return of SBUX data in a AR(1) model with drift:
+$$X_t=0.0015-0.0321X_{t-1}+\varepsilon_t$$
+The are independent but not normally distributed. Its density must be fat tail.
+
+
+# Appendix
+
